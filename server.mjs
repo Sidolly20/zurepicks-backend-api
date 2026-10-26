@@ -53,6 +53,66 @@ function normalized(odds) {
   const inv = odds.map(x => 1 / Number(x)); const total = inv.reduce((a, b) => a + b, 0);
   return inv.map(x => x / total);
 }
+function historicalMatches() {
+  const out = [];
+  for (const d of allDataDates()) {
+    const j = dataFor(d);
+    for (const m of j?.matches || []) {
+      if (!['FT', 'AET', 'PEN'].includes(m.st) || !Array.isArray(m.sc) || m.sc.some(x => !Number.isFinite(Number(x)))) continue;
+      out.push(m);
+    }
+  }
+  return out;
+}
+function poisson(lambda, max = 8) {
+  const p = [Math.exp(-lambda)];
+  for (let i = 1; i <= max; i++) p[i] = p[i - 1] * lambda / i;
+  const sum = p.reduce((a, b) => a + b, 0);
+  return p.map(x => x / sum);
+}
+function statisticalPicks(m) {
+  // Use only completed matches dated before the fixture; never use its own result.
+  const cutoff = String(m.d || '').slice(0, 10);
+  const past = historicalMatches().filter(x => String(x.d || '').slice(0, 10) < cutoff && x.id !== m.id);
+  const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const teamGames = name => past.filter(x => norm(x.h) === norm(name) || norm(x.a) === norm(name)).slice(-8);
+  const hg = teamGames(m.h), ag = teamGames(m.a);
+  if (hg.length < 3 || ag.length < 3) return {};
+  const league = past.filter(x => x.li === m.li).slice(-100);
+  const base = league.length >= 5 ? league : past.slice(-150);
+  const avgHome = base.length ? base.reduce((s, x) => s + Number(x.sc[0]), 0) / base.length : 1.35;
+  const avgAway = base.length ? base.reduce((s, x) => s + Number(x.sc[1]), 0) / base.length : 1.1;
+  const rates = games => {
+    let gf = 0, ga = 0, n = 0;
+    for (const x of games) {
+      if (norm(x.h) === norm(games === hg ? m.h : m.a)) { gf += Number(x.sc[0]); ga += Number(x.sc[1]); }
+      else { gf += Number(x.sc[1]); ga += Number(x.sc[0]); }
+      n++;
+    }
+    return n ? { gf: gf / n, ga: ga / n, n } : null;
+  };
+  const hr = rates(hg), ar = rates(ag);
+  // Blend team scoring/conceding rates with league averages to reduce small-sample noise.
+  const expH = Math.max(.15, Math.min(4.2, (0.55 * hr.gf + 0.45 * ar.ga + avgHome) / 2));
+  const expA = Math.max(.15, Math.min(4.2, (0.55 * ar.gf + 0.45 * hr.ga + avgAway) / 2));
+  const ph = poisson(expH), pa = poisson(expA);
+  let home = 0, draw = 0, away = 0, over15 = 0, over25 = 0, btts = 0;
+  for (let i = 0; i < ph.length; i++) for (let j = 0; j < pa.length; j++) {
+    const p = ph[i] * pa[j]; if (i > j) home += p; else if (i === j) draw += p; else away += p;
+    if (i + j > 1) over15 += p; if (i + j > 2) over25 += p; if (i > 0 && j > 0) btts += p;
+  }
+  const pct = xs => xs.map(x => Math.round(x * 1000) / 10);
+  const make = (market, labels, probs) => {
+    const index = probs.indexOf(Math.max(...probs));
+    return { selection: labels[index], index, probability: Math.round(probs[index] * 100), probabilities: pct(probs), decimalOdds: null, method: 'statistical-team-form', sampleSize: Math.min(hr.n, ar.n) };
+  };
+  return {
+    '1x2': make('1x2', ['Home win', 'Draw', 'Away win'], [home, draw, away]),
+    'over-under-2.5': make('over-under-2.5', ['Over 2.5 goals', 'Under 2.5 goals'], [over25, 1 - over25]),
+    'over-under-1.5': make('over-under-1.5', ['Over 1.5 goals', 'Under 1.5 goals'], [over15, 1 - over15]),
+    'both-teams-score': make('both-teams-score', ['Yes', 'No'], [btts, 1 - btts])
+  };
+}
 function makePicks(m) {
   const markets = { '1x2': m.o, 'double-chance': m.dc, 'over-under-2.5': m.ou, 'over-under-1.5': m.o15, 'both-teams-score': m.bt };
   const out = {};
@@ -63,6 +123,9 @@ function makePicks(m) {
     const labels = { '1x2': ['Home win', 'Draw', 'Away win'], 'double-chance': ['Home or draw', 'Home or away', 'Draw or away'], 'over-under-2.5': ['Over 2.5 goals', 'Under 2.5 goals'], 'over-under-1.5': ['Over 1.5 goals', 'Under 1.5 goals'], 'both-teams-score': ['Yes', 'No'] }[market];
     out[market] = { selection: labels[index], index, probability: Math.round(probabilities[index] * 100), decimalOdds: Number(odds[index]), probabilities: probabilities.map(x => Math.round(x * 1000) / 10), method: 'bookmaker-odds-normalized' };
   }
+  // Odds are optional. Only use the statistical model where the bookmaker model has no pick.
+  const statistical = statisticalPicks(m);
+  for (const [market, pick] of Object.entries(statistical)) if (!out[market]) out[market] = pick;
   return out;
 }
 function allDataDates() {
