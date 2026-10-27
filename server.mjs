@@ -7,8 +7,19 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.resolve(process.env.DATA_DIR || path.join(ROOT, 'data'));
 fs.mkdirSync(DATA, { recursive: true });
-// Seed an empty persistent data directory with the snapshots shipped in this package.
-try { if (fs.readdirSync(DATA).length === 0) fs.cpSync(path.join(ROOT, 'data'), DATA, { recursive: true }); } catch {}
+// Seed the data directory with the snapshots shipped in this package when it has none.
+// Bundled snapshots may sit in ./data/ or (as in the GitHub ZIP) directly in the project root.
+const SNAP = /^\d{4}-\d\d-\d\d\.json$/;
+const hasSnapshots = dir => { try { return fs.readdirSync(dir).some(f => SNAP.test(f)); } catch { return false; } };
+try {
+  if (!hasSnapshots(DATA)) {
+    const src = [path.join(ROOT, 'data'), ROOT].find(d => path.resolve(d) !== DATA && hasSnapshots(d));
+    if (src) {
+      for (const f of fs.readdirSync(src)) if (SNAP.test(f) || f === 'form.json' || f === 'history.json') fs.copyFileSync(path.join(src, f), path.join(DATA, f));
+      console.log(`Seeded ${DATA} with bundled snapshots from ${src}`);
+    } else console.warn(`WARNING: no match snapshots found in ${DATA}; run a refresh or add YYYY-MM-DD.json files.`);
+  }
+} catch (e) { console.error('Snapshot seeding failed:', e.message); }
 const PORT = Number(process.env.PORT || 10000);
 const TZ = process.env.TZ_NAME || 'Africa/Lagos';
 const allowedOrigins = (process.env.CORS_ORIGINS || '*').split(',').map(x => x.trim()).filter(Boolean);
@@ -53,7 +64,10 @@ function normalized(odds) {
   const inv = odds.map(x => 1 / Number(x)); const total = inv.reduce((a, b) => a + b, 0);
   return inv.map(x => x / total);
 }
+let histCache = { key: '', rows: [] };
 function historicalMatches() {
+  const key = allDataDates().map(d => { try { return d + fs.statSync(path.join(DATA, `${d}.json`)).mtimeMs; } catch { return d; } }).join('|');
+  if (histCache.key === key) return histCache.rows;
   const out = [];
   for (const d of allDataDates()) {
     const j = dataFor(d);
@@ -62,6 +76,7 @@ function historicalMatches() {
       out.push(m);
     }
   }
+  histCache = { key, rows: out };
   return out;
 }
 function poisson(lambda, max = 8) {

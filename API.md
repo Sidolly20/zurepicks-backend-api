@@ -32,3 +32,11 @@ The current probabilities are derived from bookmaker decimal odds with the impli
 ## Frontend connection
 
 After the backend is deployed, edit `api-config.js` in the frontend ZIP and set `window.ZUREPICKS_API_BASE` to the backend origin. The homepage uses the API when available and falls back to the published JSON snapshots when it is not connected.
+
+## Linking the website and the backend
+
+- Backend address: `https://zurepicks-backend-api.onrender.com`
+- Website address: `https://sidolly20.github.io/zurepick-site/`
+- On Render (Environment) set `CORS_ORIGINS=https://sidolly20.github.io` (origin only, no path, no trailing slash).
+- In the website repository, `api-config.js` must contain the line in `frontend-config/api-config.js` from this package. Check the existing file first and change only the address if it holds other settings.
+- Check: open `https://zurepicks-backend-api.onrender.com/api/health`; `datesAvailable` should list dates.
