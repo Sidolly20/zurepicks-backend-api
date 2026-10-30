@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "description": "ZurePicks football data and prediction API",
-  "scripts": { "start": "node server.mjs", "check": "node --check server.mjs && node --check generate.mjs && node --check sources.mjs && node --check form.mjs && node --check test.mjs", "test": "node --test test.mjs" },
-  "engines": { "node": ">=20" }
+  "scripts": { 
+    "start": "node server.mjs", 
+    "check": "node --check server.mjs && node --check generate.mjs && node --check sources.mjs && node --check form.mjs && node --check test.mjs", 
+    "test": "node --test test.mjs" 
+  },
+  "engines": { 
+    "node": ">=20" 
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
 }
