@@ -3,19 +3,15 @@ import cors from 'cors';
 
 const app = express();
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ==========================================
-// 1. HEALTH CHECK ROUTE
-// ==========================================
 app.get('/api/health', (req, res) => {
     res.json({ status: "healthy", timestamp: new Date() });
 });
 
 // ==========================================
-// 2. LIVE DATE-AWARE FIXTURE POOL (TODAY & TOMORROW)
+// DIVERSE MULTI-MARKET FIXTURE POOL (TODAY & TOMORROW)
 // ==========================================
 const getSiteFixtures = (targetDay = 'today') => {
     const todayObj = new Date();
@@ -24,27 +20,27 @@ const getSiteFixtures = (targetDay = 'today') => {
 
     const todayStr = todayObj.toISOString().split('T')[0];
     const tomorrowStr = tomorrowObj.toISOString().split('T')[0];
-    
     const activeDate = targetDay === 'tomorrow' ? tomorrowStr : todayStr;
 
     return [
-        { id: "f1", date: activeDate, league: "Spain · La Liga", home: "Villarreal", away: "Espanyol", market: "Home Win", odds: 1.41, winChance: 67 },
-        { id: "f2", date: activeDate, league: "France · Ligue 1", home: "Le Havre", away: "Paris Saint-Germain", market: "Away Win", odds: 1.25, winChance: 76 },
-        { id: "f3", date: activeDate, league: "Colombia · Primera A", home: "América de Cali", away: "Fortaleza FC", market: "Home Win", odds: 1.48, winChance: 62 },
-        { id: "f4", date: activeDate, league: "Turkey · Super Lig", home: "Konyaspor", away: "Galatasaray", market: "Away Win", odds: 1.54, winChance: 61 },
-        { id: "f5", date: activeDate, league: "Belgium · Pro League", home: "SV Zulte Waregem", away: "Club Brugge KV", market: "Away Win", odds: 1.45, winChance: 64 },
-        { id: "f6", date: activeDate, league: "Bulgaria · Parva Liga", home: "FC CSKA 1948 Sofia", away: "FK Spartak Varna", market: "Home Win", odds: 1.39, winChance: 65 },
-        { id: "f7", date: activeDate, league: "Romania · Superliga", home: "FC Rapid București", away: "FK Csíkszereda", market: "Home Win", odds: 1.26, winChance: 73 },
-        { id: "f8", date: activeDate, league: "France · Ligue 2", home: "Nantes", away: "Clermont Foot", market: "Home Win", odds: 1.44, winChance: 63 }
+        { id: "f1", date: activeDate, league: "Norway · Eliteserien", home: "Bodø/Glimt", away: "Viking FK", market: "Over 2.5 Goals", odds: 1.31, winChance: 85 },
+        { id: "f2", date: activeDate, league: "Spain · La Liga", home: "Levante UD", away: "Atlético Madrid", market: "Over 1.5 Goals", odds: 1.15, winChance: 90 },
+        { id: "f3", date: activeDate, league: "USA · MLS", home: "FC Cincinnati", away: "Philadelphia Union", market: "Over 2.5 Goals", odds: 1.33, winChance: 82 },
+        { id: "f4", date: activeDate, league: "Brazil · Serie A", home: "Corinthians", away: "Mirassol", market: "Over 1.5 Goals", odds: 1.32, winChance: 88 },
+        { id: "f5", date: activeDate, league: "Japan · J1 League", home: "Kyoto Sanga FC", away: "Shimizu S-Pulse", market: "Double Chance (1X)", odds: 1.28, winChance: 86 },
+        { id: "f6", date: activeDate, league: "Turkey · Super Lig", home: "Erzurumspor FK", away: "Çorum FK", market: "Both Teams to Score", odds: 1.72, winChance: 78 },
+        { id: "f7", date: activeDate, league: "Switzerland · Super League", home: "Grasshopper Club", away: "FC Vaduz", market: "Both Teams to Score", odds: 1.34, winChance: 81 },
+        { id: "f8", date: activeDate, league: "Austria · Bundesliga", home: "LASK", away: "WSG Tirol", market: "Over 2.5 Goals", odds: 1.36, winChance: 80 },
+        { id: "f9", date: activeDate, league: "Netherlands · Eredivisie", home: "Feyenoord", away: "Fortuna Sittard", market: "Home Win", odds: 1.16, winChance: 89 }
     ];
 };
 
-function buildDateAwareSlip(targetMin, targetMax, dayType) {
+function buildDiverseSlip(targetMin, targetMax, dayType) {
     const fixtures = getSiteFixtures(dayType);
     let slipLegs = [];
     let totalOdds = 1.0;
     
-    // Sort by highest win odds probability
+    // Sort by highest percentage confidence
     const sorted = [...fixtures].sort((a, b) => b.winChance - a.winChance);
     
     for (let match of sorted) {
@@ -73,50 +69,18 @@ function buildDateAwareSlip(targetMin, targetMax, dayType) {
     };
 }
 
-// Endpoints supporting ?day=today or ?day=tomorrow
 app.get('/api/ai-chat/get-2-odds', (req, res) => {
     const day = req.query.day || 'today';
-    res.json(buildDateAwareSlip(2.00, 2.50, day));
+    res.json(buildDiverseSlip(2.00, 2.50, day));
 });
 
 app.get('/api/ai-chat/get-3-odds', (req, res) => {
     const day = req.query.day || 'today';
-    res.json(buildDateAwareSlip(3.00, 3.80, day));
+    res.json(buildDiverseSlip(3.00, 3.80, day));
 });
 
-
-// ==========================================
-// 3. EXISTING SITE ROUTES
-// ==========================================
 app.get('/api/matches', (req, res) => {
-    const { date } = req.query;
-    res.json({ message: "Matches endpoint active", date, fixtures: getSiteFixtures('today') });
-});
-
-app.get('/api/matches/range', (req, res) => {
-    const { from, to } = req.query;
-    res.json({ message: "Matches range endpoint active", from, to });
-});
-
-app.get('/api/predictions', (req, res) => {
-    const { date } = req.query;
-    res.json({ message: "Predictions endpoint active", date });
-});
-
-app.get('/api/history', (req, res) => {
-    res.json({ message: "History endpoint active" });
-});
-
-app.get('/api/track-record', (req, res) => {
-    res.json({ message: "Track record endpoint active" });
-});
-
-app.post('/api/refresh', (req, res) => {
-    res.json({ success: true, message: "Data refresh triggered" });
-});
-
-app.get('/api/refresh-status', (req, res) => {
-    res.json({ status: "idle" });
+    res.json({ fixtures: getSiteFixtures('today') });
 });
 
 app.use((req, res) => {
