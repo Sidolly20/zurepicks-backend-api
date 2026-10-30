@@ -15,7 +15,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // ==========================================
-// 2. NEW: 2-3 ODDS BANKER ENGINE & API ROUTE
+// 2. 2 & 3 ODDS SEPARATE BANKER ENGINE & API ROUTES
 // ==========================================
 const allFixtures = [
     { home: "Arsenal", away: "Burnley", market: "Home Win", odds: 1.35 },
@@ -25,38 +25,42 @@ const allFixtures = [
     { home: "Man City", away: "Luton", market: "Over 2.5 Goals", odds: 1.50 }
 ];
 
-function buildTargetSlip(targetMin = 2.00, targetMax = 3.00) {
+function buildTargetSlip(exactTarget) {
     let slipLegs = [];
     let totalOdds = 1.0;
+    let min = exactTarget - 0.2;
+    let max = exactTarget + 0.2;
     
     for (let match of allFixtures) {
-        if (totalOdds * match.odds <= targetMax + 0.2) {
+        if (totalOdds * match.odds <= max + 0.3) {
             slipLegs.push(match);
             totalOdds *= match.odds;
         }
-        if (totalOdds >= targetMin && totalOdds <= targetMax) {
+        if (totalOdds >= min && totalOdds <= max) {
             break; 
         }
     }
     
     return {
         success: true,
-        oddsRange: "2-3 Odds Banker",
+        oddsRange: `${exactTarget}.00 Odds Banker`,
         legs: slipLegs,
         totalOdds: Number(totalOdds.toFixed(2))
     };
 }
 
-// Registering the new endpoint
-app.get('/api/ai-chat/get-safe-odds', (req, res) => {
-    const slip = buildTargetSlip(2.00, 3.00);
-    res.json(slip);
+// Separate Endpoints for 2 Odds and 3 Odds
+app.get('/api/ai-chat/get-2-odds', (req, res) => {
+    res.json(buildTargetSlip(2.0));
+});
+
+app.get('/api/ai-chat/get-3-odds', (req, res) => {
+    res.json(buildTargetSlip(3.0));
 });
 
 
 // ==========================================
 // 3. YOUR EXISTING MATCH & PREDICTION ROUTES 
-// (Paste your existing route handlers for matches/predictions here if they weren't imported from elsewhere)
 // ==========================================
 app.get('/api/matches', (req, res) => {
     const { date } = req.query;
@@ -98,7 +102,8 @@ app.use((req, res) => {
         error: "API route not found.",
         routes: [
             "GET /api/health", 
-            "GET /api/ai-chat/get-safe-odds",
+            "GET /api/ai-chat/get-2-odds",
+            "GET /api/ai-chat/get-3-odds",
             "GET /api/matches?date=YYYY-MM-DD", 
             "GET /api/matches/range?from=YYYY-MM-DD&to=YYYY-MM-DD", 
             "GET /api/predictions?date=YYYY-MM-DD", 
