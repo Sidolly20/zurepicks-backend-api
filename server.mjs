@@ -11,7 +11,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // ==========================================
-// DIVERSE MULTI-MARKET FIXTURE POOL (TODAY & TOMORROW)
+// DISTINCT TODAY & TOMORROW FIXTURE POOLS
 // ==========================================
 const getSiteFixtures = (targetDay = 'today') => {
     const todayObj = new Date();
@@ -20,19 +20,26 @@ const getSiteFixtures = (targetDay = 'today') => {
 
     const todayStr = todayObj.toISOString().split('T')[0];
     const tomorrowStr = tomorrowObj.toISOString().split('T')[0];
-    const activeDate = targetDay === 'tomorrow' ? tomorrowStr : todayStr;
 
-    return [
-        { id: "f1", date: activeDate, league: "Norway · Eliteserien", home: "Bodø/Glimt", away: "Viking FK", market: "Over 2.5 Goals", odds: 1.31, winChance: 85 },
-        { id: "f2", date: activeDate, league: "Spain · La Liga", home: "Levante UD", away: "Atlético Madrid", market: "Over 1.5 Goals", odds: 1.15, winChance: 90 },
-        { id: "f3", date: activeDate, league: "USA · MLS", home: "FC Cincinnati", away: "Philadelphia Union", market: "Over 2.5 Goals", odds: 1.33, winChance: 82 },
-        { id: "f4", date: activeDate, league: "Brazil · Serie A", home: "Corinthians", away: "Mirassol", market: "Over 1.5 Goals", odds: 1.32, winChance: 88 },
-        { id: "f5", date: activeDate, league: "Japan · J1 League", home: "Kyoto Sanga FC", away: "Shimizu S-Pulse", market: "Double Chance (1X)", odds: 1.28, winChance: 86 },
-        { id: "f6", date: activeDate, league: "Turkey · Super Lig", home: "Erzurumspor FK", away: "Çorum FK", market: "Both Teams to Score", odds: 1.72, winChance: 78 },
-        { id: "f7", date: activeDate, league: "Switzerland · Super League", home: "Grasshopper Club", away: "FC Vaduz", market: "Both Teams to Score", odds: 1.34, winChance: 81 },
-        { id: "f8", date: activeDate, league: "Austria · Bundesliga", home: "LASK", away: "WSG Tirol", market: "Over 2.5 Goals", odds: 1.36, winChance: 80 },
-        { id: "f9", date: activeDate, league: "Netherlands · Eredivisie", home: "Feyenoord", away: "Fortuna Sittard", market: "Home Win", odds: 1.16, winChance: 89 }
-    ];
+    if (targetDay === 'tomorrow') {
+        return [
+            { id: "tm1", date: tomorrowStr, league: "Spain · La Liga", home: "Real Madrid", away: "Real Valladolid", market: "Home Win", odds: 1.37, winChance: 89 },
+            { id: "tm2", date: tomorrowStr, league: "Italy · Serie A", home: "Inter Milan", away: "Monza", market: "Home Win", odds: 1.28, winChance: 91 },
+            { id: "tm3", date: tomorrowStr, league: "Germany · Bundesliga", home: "Bayern Munich", away: "VfL Bochum", market: "Over 2.5 Goals", odds: 1.24, winChance: 93 },
+            { id: "tm4", date: tomorrowStr, league: "England · Premier League", home: "Arsenal", away: "Everton", market: "Home Win", odds: 1.32, winChance: 88 },
+            { id: "tm5", date: tomorrowStr, league: "France · Ligue 1", home: "AS Monaco", away: "Stade Brestois", market: "Both Teams to Score", odds: 1.58, winChance: 82 },
+            { id: "tm6", date: tomorrowStr, league: "Portugal · Primeira Liga", home: "FC Porto", away: "Boavista", market: "Home Win", odds: 1.29, winChance: 90 }
+        ];
+    } else {
+        return [
+            { id: "td1", date: todayStr, league: "Norway · Eliteserien", home: "Bodø/Glimt", away: "Viking FK", market: "Over 2.5 Goals", odds: 1.31, winChance: 85 },
+            { id: "td2", date: todayStr, league: "Spain · La Liga", home: "Levante UD", away: "Atlético Madrid", market: "Over 1.5 Goals", odds: 1.15, winChance: 90 },
+            { id: "td3", date: todayStr, league: "USA · MLS", home: "FC Cincinnati", away: "Philadelphia Union", market: "Over 2.5 Goals", odds: 1.33, winChance: 82 },
+            { id: "td4", date: todayStr, league: "Brazil · Serie A", home: "Corinthians", away: "Mirassol", market: "Over 1.5 Goals", odds: 1.32, winChance: 88 },
+            { id: "td5", date: todayStr, league: "Japan · J1 League", home: "Kyoto Sanga FC", away: "Shimizu S-Pulse", market: "Double Chance (1X)", odds: 1.28, winChance: 86 },
+            { id: "td6", date: todayStr, league: "Turkey · Super Lig", home: "Erzurumspor FK", away: "Çorum FK", market: "Both Teams to Score", odds: 1.72, winChance: 78 }
+        ];
+    }
 };
 
 function buildDiverseSlip(targetMin, targetMax, dayType) {
@@ -40,7 +47,6 @@ function buildDiverseSlip(targetMin, targetMax, dayType) {
     let slipLegs = [];
     let totalOdds = 1.0;
     
-    // Sort by highest percentage confidence
     const sorted = [...fixtures].sort((a, b) => b.winChance - a.winChance);
     
     for (let match of sorted) {
