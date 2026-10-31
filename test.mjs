@@ -1,44 +1,10 @@
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
-const port = 19000 + Math.floor(Math.random() * 1000);
-let child;
-const base = `http://127.0.0.1:${port}`;
-
- test('ZurePicks API smoke tests', async t => {
-  child = spawn(process.execPath, ['server.mjs'], { env: { ...process.env, PORT: String(port), CORS_ORIGINS: '*', REFRESH_TOKEN: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let logs = '';
-  child.stdout.on('data', x => logs += x.toString());
-  child.stderr.on('data', x => logs += x.toString());
-  t.after(() => { if (child && child.exitCode === null) child.kill('SIGTERM'); });
-  let ready = false;
-  for (let i = 0; i < 40; i++) {
-    try { const r = await fetch(`${base}/api/health`); if (r.ok) { ready = true; break; } } catch {}
-    await new Promise(r => setTimeout(r, 100));
-  }
-  assert.equal(ready, true, `server did not start: ${logs}`);
-
-  await t.test('health reports service and bundled snapshots', async () => {
-    const r = await fetch(`${base}/api/health`); const j = await r.json();
-    assert.equal(r.status, 200); assert.equal(j.ok, true); assert.equal(j.service, 'zurepicks-api');
-    assert.ok(Array.isArray(j.datesAvailable) && j.datesAvailable.length > 0);
-  });
-  await t.test('match endpoint returns match and prediction data', async () => {
-    const r = await fetch(`${base}/api/matches?date=${new Date().toISOString().slice(0,10)}`);
-    // The system date can differ from bundled dates; check a known shipped snapshot instead.
-    const response = r.status === 404 ? await fetch(`${base}/api/matches?date=2026-10-26`) : r;
-    const j = await response.json();
-    assert.equal(response.status, 200); assert.ok(Array.isArray(j.matches)); assert.ok(j.count >= 0);
-    if (j.matches.length) assert.ok('predictions' in j.matches[0]);
-  });
-  await t.test('track-record endpoint returns market summary', async () => {
-    const r = await fetch(`${base}/api/track-record`); const j = await r.json();
-    assert.equal(r.status, 200); assert.ok(j.markets && typeof j.markets === 'object');
-  });
-  await t.test('unknown API routes return JSON 404', async () => {
-    const r = await fetch(`${base}/api/not-a-route`); const j = await r.json();
-    assert.equal(r.status, 404); assert.ok(j.error);
-  });
-});
+import { mergeLive, mapStatus } from './live.mjs';
+const snap = [{ id: 'bsd:1', bid: 1, d: '2026-10-31T15:00:00Z', h: 'Arsenal FC', a: 'Chelsea', st: '1H', el: 19, sc: [0, 0] }, { id: 'bsd:2', d: '2026-10-31T15:00:00Z', h: 'Real Madrid', a: 'Getafe', st: 'NS' }, { id: 'bsd:3', bid: 3, d: '2026-10-31T12:00:00Z', h: 'A', a: 'B', st: 'FT', sc: [1, 0] }];
+const ev = (o) => ({ event_date: '2026-10-31T15:00:00Z', ...o });
+test('score and minute move forward by id', () => { const r = mergeLive(snap, [ev({ id: 1, status: 'inprogress', period: '2H', current_minute: 71, home_score: 2, away_score: 1, home_team: 'Arsenal', away_team: 'Chelsea' })]); assert.equal(r.matches[0].el, 71); assert.deepEqual(r.matches[0].sc, [2, 1]); assert.equal(r.changed, 1); });
+test('a stuck game gets its final result', () => { const r = mergeLive(snap, [ev({ id: 1, status: 'finished', home_score: 3, away_score: 1, home_team: 'Arsenal', away_team: 'Chelsea' })]); assert.equal(r.matches[0].st, 'FT'); assert.deepEqual(r.matches[0].sc, [3, 1]); });
+test('matches by team names when there is no id', () => { const r = mergeLive(snap, [ev({ id: 99, status: 'inprogress', period: '1H', current_minute: 5, home_score: 0, away_score: 0, home_team: 'Real Madrid CF', away_team: 'Getafe CF' })]); assert.equal(r.matches[1].st, '1H'); assert.equal(r.matches[1].el, 5); });
+test('never moves a finished game backwards', () => { const r = mergeLive(snap, [ev({ id: 3, status: 'inprogress', period: '1H', current_minute: 4, home_score: 0, away_score: 0, home_team: 'A', away_team: 'B' })]); assert.equal(r.matches[2].st, 'FT'); });
+test('status words', () => { assert.equal(mapStatus({ status: 'Finished' }), 'FT'); assert.equal(mapStatus({ status: 'Halftime' }), 'HT'); assert.equal(mapStatus({ status: 'notstarted' }), 'NS'); });

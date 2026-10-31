@@ -1,99 +1,50 @@
+// ZurePicks API: serves each day's games with LIVE scores laid over the site's saved data.
+// Odds and picks come from the site's data files; scores, minutes and final results come live from Bzzoiro.
 import express from 'express';
 import cors from 'cors';
+import { bsdList, mergeLive, mapStatus, rank } from './live.mjs';
 
-const app = express();
+const PORT = process.env.PORT || 3000, TZ = process.env.TZ_NAME || 'Africa/Lagos';
+const SITE = (process.env.SITE_DATA_BASE || 'https://sidolly20.github.io/zurepick-site/data').replace(/\/$/, '');
+const LIVE_TTL = +process.env.LIVE_TTL_MS || 20000, FIN_TTL = +process.env.FINISHED_TTL_MS || 60000, SNAP_TTL = +process.env.SNAPSHOT_TTL_MS || 120000;
+const app = express(); app.use(cors());
+const dayAt = (t) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(t), utc = (o) => new Date(Date.now() + o * 864e5).toISOString().slice(0, 10);
 
-app.use(cors());
-app.use(express.json());
+// One shared fetch per cache key at a time; if the source fails, keep serving the last good answer.
+const store = new Map();
+async function cached(key, ttl, fn) {
+  const e = store.get(key) || { t: 0, v: null, p: null, err: null }; store.set(key, e);
+  if (e.v && Date.now() - e.t < ttl) return e;
+  e.p ??= fn().then((v) => { e.v = v; e.t = Date.now(); e.err = null; }).catch((x) => { e.err = x.message; }).finally(() => { e.p = null; });
+  await e.p; return e;
+}
+const snapshot = (d) => cached('snap:' + d, SNAP_TTL, async () => { const r = await fetch(`${SITE}/${d}.json?_=${Math.floor(Date.now() / SNAP_TTL)}`, { signal: AbortSignal.timeout(8000) }); if (!r.ok) throw new Error('snapshot ' + r.status); return r.json(); });
+const liveNow = () => cached('live', LIVE_TTL, () => bsdList(utc(-1), utc(1), 'live'));
+const finished = () => cached('fin', FIN_TTL, () => bsdList(utc(-1), utc(0), 'finished'));
 
 app.get('/api/health', (req, res) => {
-    res.json({ status: "healthy", timestamp: new Date() });
+  const l = store.get('live'), f = store.get('fin');
+  res.json({ status: 'healthy', uptimeSec: Math.round(process.uptime()), live: { ageSec: l?.t ? Math.round((Date.now() - l.t) / 1000) : null, error: l?.err || null }, finished: { ageSec: f?.t ? Math.round((Date.now() - f.t) / 1000) : null, error: f?.err || null }, timestamp: new Date() });
 });
 
-// ==========================================
-// DISTINCT TODAY & TOMORROW FIXTURE POOLS
-// ==========================================
-const getSiteFixtures = (targetDay = 'today') => {
-    const todayObj = new Date();
-    const tomorrowObj = new Date();
-    tomorrowObj.setDate(todayObj.getDate() + 1);
-
-    const todayStr = todayObj.toISOString().split('T')[0];
-    const tomorrowStr = tomorrowObj.toISOString().split('T')[0];
-
-    if (targetDay === 'tomorrow') {
-        return [
-            { id: "tm1", date: tomorrowStr, league: "Spain · La Liga", home: "Real Madrid", away: "Real Valladolid", market: "Home Win", odds: 1.37, winChance: 89 },
-            { id: "tm2", date: tomorrowStr, league: "Italy · Serie A", home: "Inter Milan", away: "Monza", market: "Home Win", odds: 1.28, winChance: 91 },
-            { id: "tm3", date: tomorrowStr, league: "Germany · Bundesliga", home: "Bayern Munich", away: "VfL Bochum", market: "Over 2.5 Goals", odds: 1.24, winChance: 93 },
-            { id: "tm4", date: tomorrowStr, league: "England · Premier League", home: "Arsenal", away: "Everton", market: "Home Win", odds: 1.32, winChance: 88 },
-            { id: "tm5", date: tomorrowStr, league: "France · Ligue 1", home: "AS Monaco", away: "Stade Brestois", market: "Both Teams to Score", odds: 1.58, winChance: 82 },
-            { id: "tm6", date: tomorrowStr, league: "Portugal · Primeira Liga", home: "FC Porto", away: "Boavista", market: "Home Win", odds: 1.29, winChance: 90 }
-        ];
-    } else {
-        return [
-            { id: "td1", date: todayStr, league: "Norway · Eliteserien", home: "Bodø/Glimt", away: "Viking FK", market: "Over 2.5 Goals", odds: 1.31, winChance: 85 },
-            { id: "td2", date: todayStr, league: "Spain · La Liga", home: "Levante UD", away: "Atlético Madrid", market: "Over 1.5 Goals", odds: 1.15, winChance: 90 },
-            { id: "td3", date: todayStr, league: "USA · MLS", home: "FC Cincinnati", away: "Philadelphia Union", market: "Over 2.5 Goals", odds: 1.33, winChance: 82 },
-            { id: "td4", date: todayStr, league: "Brazil · Serie A", home: "Corinthians", away: "Mirassol", market: "Over 1.5 Goals", odds: 1.32, winChance: 88 },
-            { id: "td5", date: todayStr, league: "Japan · J1 League", home: "Kyoto Sanga FC", away: "Shimizu S-Pulse", market: "Double Chance (1X)", odds: 1.28, winChance: 86 },
-            { id: "td6", date: todayStr, league: "Turkey · Super Lig", home: "Erzurumspor FK", away: "Çorum FK", market: "Both Teams to Score", odds: 1.72, winChance: 78 }
-        ];
-    }
-};
-
-function buildDiverseSlip(targetMin, targetMax, dayType) {
-    const fixtures = getSiteFixtures(dayType);
-    let slipLegs = [];
-    let totalOdds = 1.0;
-    
-    const sorted = [...fixtures].sort((a, b) => b.winChance - a.winChance);
-    
-    for (let match of sorted) {
-        if (slipLegs.length >= 5) break;
-        slipLegs.push(match);
-        totalOdds *= match.odds;
-        
-        if (slipLegs.length >= 3 && totalOdds >= targetMin) {
-            break;
-        }
-    }
-
-    if (totalOdds < targetMin && sorted.length >= 3) {
-        slipLegs = sorted.slice(0, 3);
-        totalOdds = slipLegs.reduce((acc, m) => acc * m.odds, 1.0);
-    }
-
-    const dayLabel = dayType === 'tomorrow' ? 'Tomorrow’s' : 'Today’s';
-
-    return {
-        success: true,
-        dateQuery: dayType,
-        oddsRange: `${dayLabel} ${targetMin === 2.0 ? '2+ Odds Banker' : '3+ Odds Banker'}`,
-        legs: slipLegs,
-        totalOdds: Number(totalOdds.toFixed(2))
-    };
-}
-
-app.get('/api/ai-chat/get-2-odds', (req, res) => {
-    const day = req.query.day || 'today';
-    res.json(buildDiverseSlip(2.00, 2.50, day));
+app.get('/api/matches', async (req, res) => {
+  const date = /^\d{4}-\d\d-\d\d$/.test(req.query.date || '') ? req.query.date : dayAt(Date.now());
+  const [s, l, f] = await Promise.all([snapshot(date), liveNow(), finished()]);
+  if (!s.v) return res.json({ date, matches: [], source: 'none', error: s.err });
+  const events = [...(l.v || []), ...(f.v || [])], liveOk = !!(l.v || f.v);
+  const { matches } = events.length ? mergeLive(s.v.matches || [], events) : { matches: s.v.matches || [] };
+  res.set('Cache-Control', 'public, max-age=10');
+  res.json({ ...s.v, matches, source: liveOk ? 'live' : 'snapshot', liveUpdated: liveOk ? new Date(Math.max(l.t, f.t)).toISOString() : s.v.updated, liveError: l.err || f.err || null });
 });
 
-app.get('/api/ai-chat/get-3-odds', (req, res) => {
-    const day = req.query.day || 'today';
-    res.json(buildDiverseSlip(3.00, 3.80, day));
+// Compact list of games in play right now.
+app.get('/api/live', async (req, res) => {
+  const l = await liveNow();
+  res.set('Cache-Control', 'public, max-age=10');
+  res.json({ updated: l.t ? new Date(l.t).toISOString() : null, error: l.err, live: (l.v || []).filter((e) => rank(mapStatus(e)) == 2).map((e) => ({ id: e.id, home: e.home_team, away: e.away_team, score: [e.home_score, e.away_score], minute: e.current_minute, status: mapStatus(e) })) });
 });
 
-app.get('/api/matches', (req, res) => {
-    res.json({ fixtures: getSiteFixtures('today') });
-});
-
-app.use((req, res) => {
-    res.status(404).json({ error: "API route not found." });
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+// The old demo "AI banker" endpoints returned made-up games and win chances, so they are retired.
+app.use(['/api/ai-chat'], (req, res) => res.status(410).json({ error: 'Retired. Use the AI Picker on the website.' }));
+app.use((req, res) => res.status(404).json({ error: 'API route not found.' }));
+app.listen(PORT, () => { console.log('ZurePicks live API on port ' + PORT); liveNow(); finished(); });
