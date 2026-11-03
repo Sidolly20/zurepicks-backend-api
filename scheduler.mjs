@@ -1,12 +1,13 @@
 // The backend is the clock: it posts to Telegram at fixed times (Africa/Lagos) and pokes GitHub to refresh the site's data.
 // Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for posting; GITHUB_TOKEN (+ GITHUB_REPO) is optional, for the data refresh.
 import { matchesFor, dataJson, dayAt, TZ } from './core.mjs';
-import { build } from './posts.mjs';
+import { build, potdResult } from './posts.mjs';
+import { settled } from './render.js';
 const T = () => process.env.TELEGRAM_BOT_TOKEN, C = () => process.env.TELEGRAM_CHAT_ID, API = () => process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
 const SITE_URL = () => (process.env.SITE_URL || 'https://sidolly20.github.io/zurepick-site').replace(/\/$/, '');
-export const JOBS = [{ id: 'slips', h: 7, m: 30 }, { id: 'potd', h: 7, m: 45 }, { id: 'recap', h: 22, m: 30 }, { id: 'weekly', h: 8, m: 0, dow: 'Mon' }];
+export const JOBS = [{ id: 'slips', h: 7, m: 30 }, { id: 'potd', h: 7, m: 45 }, { id: 'recap', h: 23, m: 15 }, { id: 'weekly', h: 8, m: 0, dow: 'Mon' }];
 const WINDOW = 45; // minutes after the set time during which a missed post is still sent
-export const state = { sent: {}, lastRun: {}, lastDispatch: null, dispatchError: null };
+export const state = { sent: {}, lastRun: {}, lastDispatch: null, dispatchError: null, potd: {} };
 const busy = new Set();
 
 export function clock(now = new Date()) {
@@ -33,6 +34,28 @@ export async function tick(now = new Date(), deps = {}) {
   return out;
 }
 
+// Posts the pick of the day's result as soon as its game has finished (once per pick; ignored if the game ended over 8 hours ago).
+export async function checkPotd(now = new Date(), deps = {}) {
+  const send = deps.send || sendTelegram; if (!deps.send && !(T() && C())) return false;
+  const getPotd = deps.potd || (() => dataJson('potd.json')), getMatches = deps.matches || matchesFor;
+  const c = clock(now), st = await getPotd().catch(() => null);
+  if (st && st.date && st.id) state.potd[st.date] = st; // each day's pick is remembered, so a result after midnight is still posted
+  let did = false;
+  for (const p of Object.values(state.potd)) {
+    const key = 'potdresult' + p.date; if (state.sent[key] || busy.has(key)) continue; busy.add(key);
+    try {
+      const m = ((await getMatches(p.date)).matches || []).find((x) => x.id === p.id);
+      if (!m || !settled(m)) continue;
+      if (now.getTime() - Date.parse(m.d) > 8 * 36e5) { state.sent[key] = 'skipped (too old)'; continue; }
+      await send(potdResult(p, m, { site: SITE_URL() }));
+      state.sent[key] = new Date().toISOString(); state.lastRun.potdresult = { at: new Date().toISOString(), result: 'sent' }; did = true;
+    } catch (e) { state.lastRun.potdresult = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
+    finally { busy.delete(key); }
+  }
+  for (const d of Object.keys(state.potd)) if (d < dayAt(now.getTime() - 3 * 864e5)) delete state.potd[d];
+  return did;
+}
+
 // Ask GitHub to run "Update match data" (its own 10-minute timer is unreliable on free repos).
 export async function dispatchUpdate(minGapMs = 9 * 60 * 1000, now = Date.now()) {
   const tok = process.env.GITHUB_TOKEN, repo = process.env.GITHUB_REPO || 'Sidolly20/zurepick-site';
@@ -41,4 +64,4 @@ export async function dispatchUpdate(minGapMs = 9 * 60 * 1000, now = Date.now())
   try { const r = await fetch(`${process.env.GITHUB_API_BASE || 'https://api.github.com'}/repos/${repo}/actions/workflows/update.yml/dispatches`, { method: 'POST', headers: { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'zurepicks-api', 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main' }), signal: AbortSignal.timeout(15000) }); state.dispatchError = r.status == 204 ? null : 'GitHub ' + r.status; return r.status == 204; }
   catch (e) { state.dispatchError = e.message; return false; }
 }
-export const startScheduler = () => { const go = () => { tick().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };
+export const startScheduler = () => { const go = () => { tick().catch(() => {}); checkPotd().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };

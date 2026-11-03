@@ -32,3 +32,9 @@ export async function build(mode, now, { matchesFor, dataJson, dayAt, site, tz }
   }
   return null;
 }
+
+// One short message for the pick of the day once its game has finished. st = potd.json entry, m = the finished match.
+export function potdResult(st, m, { site }) {
+  const ok = !!won(m, 'o', { i: st.i });
+  return `★ <b>ZurePicks · pick of the day</b>\n\n<b>${h(m.h)} ${m.sc[0]}–${m.sc[1]} ${h(m.a)}</b>\n${h(MK.o.n[st.i])} · ${st.c}% chance · odds ${Number(st.od).toFixed(2)}\n${ok ? '✅ Won' : '❌ Lost'}\n\nEvery pick, win or lose: ${site}/${foot}`;
+}

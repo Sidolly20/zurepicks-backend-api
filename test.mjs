@@ -9,13 +9,13 @@ test('matches by team names when there is no id', () => { const r = mergeLive(sn
 test('never moves a finished game backwards', () => { const r = mergeLive(snap, [ev({ id: 3, status: 'inprogress', period: '1H', current_minute: 4, home_score: 0, away_score: 0, home_team: 'A', away_team: 'B' })]); assert.equal(r.matches[2].st, 'FT'); });
 test('status words', () => { assert.equal(mapStatus({ status: 'Finished' }), 'FT'); assert.equal(mapStatus({ status: 'Halftime' }), 'HT'); assert.equal(mapStatus({ status: 'notstarted' }), 'NS'); });
 
-import { dueJobs, tick, state, clock } from './scheduler.mjs';
+import { dueJobs, tick, state, clock, checkPotd } from './scheduler.mjs';
 const at = (iso) => new Date(iso); // WAT = UTC+1
 test('jobs are due at the right Lagos times', () => {
   assert.deepEqual(dueJobs(at('2026-10-31T06:29:00Z')).map((j) => j.id), []);
   assert.deepEqual(dueJobs(at('2026-10-31T06:31:00Z')).map((j) => j.id), ['slips']);
   assert.deepEqual(dueJobs(at('2026-10-31T06:50:00Z')).map((j) => j.id).sort(), ['potd', 'slips']);
-  assert.deepEqual(dueJobs(at('2026-10-31T21:31:00Z')).map((j) => j.id), ['recap']);
+  assert.deepEqual(dueJobs(at('2026-10-31T22:16:00Z')).map((j) => j.id), ['recap']);
   assert.ok(dueJobs(at('2026-11-02T07:01:00Z')).some((j) => j.id == 'weekly')); // Monday 08:01 WAT
   assert.ok(!dueJobs(at('2026-11-03T07:01:00Z')).some((j) => j.id == 'weekly')); // Tuesday: no weekly
   assert.deepEqual(dueJobs(at('2026-10-31T08:00:00Z')).map((j) => j.id), []); // a missed post is dropped after 45 minutes
@@ -29,4 +29,20 @@ test('each post is sent once a day and retried until it has content', async () =
   assert.deepEqual(await tick(at('2026-10-31T06:34:00Z'), deps), []); // already sent
   assert.equal(sent.length, 1);
   assert.deepEqual(await tick(at('2026-11-01T06:35:00Z'), deps), ['slips']); // next day sends again
+});
+
+test('pick of the day result posts once, when the game has finished', async () => {
+  state.sent = {}; state.potd = {}; const sent = [];
+  const potd = { date: '2026-10-31', id: 'bsd:7', i: 0, c: 71, od: 1.5 };
+  let m = { id: 'bsd:7', h: 'LASK', a: 'Slovan', d: '2026-10-31T20:00:00Z', st: '2H', sc: [1, 0] };
+  const deps = { send: async (x) => sent.push(x), potd: async () => potd, matches: async () => ({ matches: [m] }) };
+  assert.equal(await checkPotd(at('2026-10-31T21:30:00Z'), deps), false); // still playing
+  m = { ...m, st: 'FT', sc: [2, 0] };
+  assert.equal(await checkPotd(at('2026-10-31T21:56:00Z'), deps), true);
+  assert.equal(await checkPotd(at('2026-10-31T21:58:00Z'), deps), false); // only once
+  assert.equal(sent.length, 1); assert.match(sent[0], /LASK 2–0 Slovan/); assert.match(sent[0], /Won/);
+  // after midnight the site has a new pick, but yesterday's result is still posted if it was not sent yet
+  state.sent = {}; sent.length = 0;
+  assert.equal(await checkPotd(at('2026-10-31T23:30:00Z'), { ...deps, potd: async () => ({ ...potd, date: '2026-11-01', id: 'x' }) }), true);
+  assert.equal(sent.length, 1);
 });
