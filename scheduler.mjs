@@ -1,11 +1,11 @@
 // The backend is the clock: it posts to Telegram at fixed times (Africa/Lagos) and pokes GitHub to refresh the site's data.
 // Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for posting; GITHUB_TOKEN (+ GITHUB_REPO) is optional, for the data refresh.
 import { matchesFor, dataJson, dayAt, TZ } from './core.mjs';
-import { build, potdResult } from './posts.mjs';
+import { build, potdResult, logSlips } from './posts.mjs';
 import { settled } from './render.js';
 const T = () => process.env.TELEGRAM_BOT_TOKEN, C = () => process.env.TELEGRAM_CHAT_ID, API = () => process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
 const SITE_URL = () => (process.env.SITE_URL || 'https://sidolly20.github.io/zurepick-site').replace(/\/$/, '');
-export const JOBS = [{ id: 'slips', h: 7, m: 30 }, { id: 'potd', h: 7, m: 45 }, { id: 'recap', h: 23, m: 15 }, { id: 'weekly', h: 8, m: 0, dow: 'Mon' }];
+export const JOBS = [{ id: 'daily', h: 23, m: 15 }]; // one Telegram update a day, at the time set here (Lagos)
 const WINDOW = 45; // minutes after the set time during which a missed post is still sent
 export const state = { sent: {}, lastRun: {}, lastDispatch: null, dispatchError: null, potd: {} };
 const busy = new Set();
@@ -64,4 +64,4 @@ export async function dispatchUpdate(minGapMs = 9 * 60 * 1000, now = Date.now())
   try { const r = await fetch(`${process.env.GITHUB_API_BASE || 'https://api.github.com'}/repos/${repo}/actions/workflows/update.yml/dispatches`, { method: 'POST', headers: { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'zurepicks-api', 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main' }), signal: AbortSignal.timeout(15000) }); state.dispatchError = r.status == 204 ? null : 'GitHub ' + r.status; return r.status == 204; }
   catch (e) { state.dispatchError = e.message; return false; }
 }
-export const startScheduler = () => { const go = () => { tick().catch(() => {}); checkPotd().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };
+export const startScheduler = () => { const go = () => { tick().catch(() => {}); logSlips(new Date(), { matchesFor, dayAt }).catch(() => {}); checkPotd().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };
