@@ -13,12 +13,14 @@ Upload these 4 files to your backend GitHub repo (same names, replace). Render r
 1. Have a Facebook Page you are admin of.
 2. Go to developers.facebook.com > My Apps > Create App. Add the Pages permissions `pages_show_list` and `pages_manage_posts`.
 3. Open Graph API Explorer, pick your app, choose "User Token", tick those two permissions, press Generate.
-4. In the Explorer, run GET `/me/accounts`. Your Page appears with its `id` and `access_token`.
-   (Meta's screens change often. If a step looks different, send me a screenshot.)
-5. In Render > your service > Environment add:
+4. IMPORTANT: that token dies in about an hour. Make it long-lived first: open developers.facebook.com/tools/debug/accesstoken,
+   paste the token, press "Extend Access Token", copy the new token, and paste it back into the Explorer's token box.
+5. In the Explorer, run GET `/me/accounts`. Your Page appears with its `id` and `access_token`.
+   (A Page token made this way normally does not expire. Meta's screens change often. If a step looks different, send me a screenshot.)
+6. In Render > your service > Environment add:
    FB_PAGE_ID = the Page id
    FB_PAGE_TOKEN = the Page access_token
-6. Never paste these into chat or GitHub.
+7. Never paste these into chat or GitHub.
 
 ## One-tap X link (free)
 1. Send any message to your bot in Telegram (your private chat, not the channel).
