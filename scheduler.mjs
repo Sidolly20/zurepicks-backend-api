@@ -1,11 +1,12 @@
 // The backend is the clock: it posts to Telegram at fixed times (Africa/Lagos) and pokes GitHub to refresh the site's data.
 // Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for posting; GITHUB_TOKEN (+ GITHUB_REPO) is optional, for the data refresh.
 import { matchesFor, dataJson, dayAt, TZ } from './core.mjs';
-import { build, potdResult, logSlips } from './posts.mjs';
+import { build, potdResult, logSlips, postedSlips, slipResult } from './posts.mjs';
+import { mirror } from './social.mjs';
 import { settled } from './render.js';
 const T = () => process.env.TELEGRAM_BOT_TOKEN, C = () => process.env.TELEGRAM_CHAT_ID, API = () => process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
 const SITE_URL = () => (process.env.SITE_URL || 'https://sidolly20.github.io/zurepick-site').replace(/\/$/, '');
-export const JOBS = [{ id: 'daily', h: 23, m: 15 }]; // one Telegram update a day, at the time set here (Lagos)
+export const JOBS = [{ id: 'slips', h: 7, m: 30 }, { id: 'daily', h: 23, m: 15 }]; // morning slips + evening update (Lagos). Delete a line to stop that post.
 const WINDOW = 45; // minutes after the set time during which a missed post is still sent
 export const state = { sent: {}, lastRun: {}, lastDispatch: null, dispatchError: null, potd: {} };
 const busy = new Set();
@@ -27,7 +28,7 @@ export async function tick(now = new Date(), deps = {}) {
   const out = [];
   for (const j of dueJobs(now)) {
     const key = j.id + clock(now).date; if (busy.has(key)) continue; busy.add(key);
-    try { const text = await builder(j.id, now); state.lastRun[j.id] = { at: new Date().toISOString(), result: text ? 'sent' : 'nothing to post yet' }; if (text) { await send(text); state.sent[key] = new Date().toISOString(); out.push(j.id); } }
+    try { const text = await builder(j.id, now); state.lastRun[j.id] = { at: new Date().toISOString(), result: text ? 'sent' : 'nothing to post yet' }; if (text) { await send(text); state.sent[key] = new Date().toISOString(); out.push(j.id); state.lastRun['social ' + j.id] = { at: new Date().toISOString(), result: JSON.stringify(await (deps.mirror || mirror)(j.id, text)) }; } }
     catch (e) { state.lastRun[j.id] = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
     finally { busy.delete(key); }
   }
@@ -47,13 +48,33 @@ export async function checkPotd(now = new Date(), deps = {}) {
       const m = ((await getMatches(p.date)).matches || []).find((x) => x.id === p.id);
       if (!m || !settled(m)) continue;
       if (now.getTime() - Date.parse(m.d) > 8 * 36e5) { state.sent[key] = 'skipped (too old)'; continue; }
-      await send(potdResult(p, m, { site: SITE_URL() }));
+      const msg = potdResult(p, m, { site: SITE_URL() }); await send(msg); await (deps.mirror || mirror)('result', msg);
       state.sent[key] = new Date().toISOString(); state.lastRun.potdresult = { at: new Date().toISOString(), result: 'sent' }; did = true;
     } catch (e) { state.lastRun.potdresult = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
     finally { busy.delete(key); }
   }
   for (const d of Object.keys(state.potd)) if (d < dayAt(now.getTime() - 3 * 864e5)) delete state.potd[d];
   return did;
+}
+
+// Posts each published 2/3 odds slip's result as soon as every one of its games has finished (once per slip; dropped after 60 hours).
+export async function checkSlips(now = new Date(), deps = {}) {
+  const send = deps.send || sendTelegram; if (!deps.send && !(T() && C())) return 0;
+  const getMatches = deps.matches || matchesFor, cache = {}; let n = 0;
+  for (const sl of postedSlips.values()) {
+    const key = 'slipresult' + sl.key; if (state.sent[key] || busy.has(key)) continue; busy.add(key);
+    try {
+      if (now.getTime() - sl.at > 60 * 36e5) { state.sent[key] = 'skipped (too old)'; continue; }
+      const byId = new Map();
+      for (const d of new Set(sl.legs.map((x) => x.date))) { cache[d] = cache[d] || ((await getMatches(d)).matches || []); cache[d].forEach((m) => byId.set(m.id, m)); }
+      if (sl.legs.some((x) => { const m = byId.get(x.id); return !m || !settled(m); })) continue;
+      const msg = slipResult(sl, byId, { site: SITE_URL() }); await send(msg); await (deps.mirror || mirror)('result', msg);
+      state.sent[key] = new Date().toISOString(); state.lastRun.slipresult = { at: new Date().toISOString(), result: 'sent' }; n++;
+    } catch (e) { state.lastRun.slipresult = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
+    finally { busy.delete(key); }
+  }
+  for (const [k, sl] of postedSlips) if (now.getTime() - sl.at > 72 * 36e5) postedSlips.delete(k);
+  return n;
 }
 
 // Ask GitHub to run "Update match data" (its own 10-minute timer is unreliable on free repos).
@@ -64,4 +85,4 @@ export async function dispatchUpdate(minGapMs = 9 * 60 * 1000, now = Date.now())
   try { const r = await fetch(`${process.env.GITHUB_API_BASE || 'https://api.github.com'}/repos/${repo}/actions/workflows/update.yml/dispatches`, { method: 'POST', headers: { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'zurepicks-api', 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main' }), signal: AbortSignal.timeout(15000) }); state.dispatchError = r.status == 204 ? null : 'GitHub ' + r.status; return r.status == 204; }
   catch (e) { state.dispatchError = e.message; return false; }
 }
-export const startScheduler = () => { const go = () => { tick().catch(() => {}); logSlips(new Date(), { matchesFor, dayAt }).catch(() => {}); checkPotd().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };
+export const startScheduler = () => { const go = () => { tick().catch(() => {}); logSlips(new Date(), { matchesFor, dayAt }).catch(() => {}); checkPotd().catch(() => {}); checkSlips().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };

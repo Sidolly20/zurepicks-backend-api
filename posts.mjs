@@ -4,6 +4,15 @@ import { combos, pick, won, settled, MK, MIN, hm } from './render.js';
 // Every slip leg shown (2, 3 and 5 odds), kept the first time it appears, so replacements are graded too.
 // Kept in memory: it restarts empty if the service redeploys.
 export const slipLog = new Map();
+// Slips exactly as posted (2 and 3 odds), so their result can be posted the moment every game has finished. Kept in memory.
+export const postedSlips = new Map();
+export function rememberSlips(cs, t, dayAt) {
+  for (const c of cs) {
+    if (![2, 3].includes(c.target)) continue;
+    const key = c.legs.map((x) => `${x.m.id}${x.k}${x.i}`).sort().join('|');
+    if (!postedSlips.has(key)) postedSlips.set(key, { key, target: c.target, od: c.od, chance: c.chance, at: t, legs: c.legs.map((x) => ({ id: x.m.id, date: dayAt(Date.parse(x.m.d)), k: x.k, i: x.i, od: x.od })) });
+  }
+}
 export async function logSlips(now, { matchesFor, dayAt }) {
   const t = now.getTime(), load = async (d) => (await matchesFor(d)).matches || [];
   const ms = [...await load(dayAt(t)), ...await load(dayAt(t + 864e5))];
@@ -31,12 +40,13 @@ export async function build(mode, now, { matchesFor, dataJson, dayAt, site, tz }
     }).filter(([, x]) => x.n);
     const resLines = [S.n ? `Picks: ${S.w} of ${S.n} won (${S.r}%)` : '', ...bySize.map(([tg, x]) => `${tg} odds legs: ${x.w} of ${x.n} won (${x.r}%)`)].filter(Boolean).join('\n');
     const cs = combos([...ms, ...await load(dayAt(t + 864e5))], t, true).filter((c) => c.legs.length && [2, 3, 5].includes(c.target));
+    rememberSlips(cs, t, dayAt);
     const legLine = (x) => `⏳ ${hm(x.m.d)} ${h(x.m.h)} v ${h(x.m.a)}: ${h(MK[x.k].n[x.i])} @${x.od.toFixed(2)}`;
     const slipBlock = (c) => `<b>${c.target} odds · total ${c.od.toFixed(2)}</b> (${c.chance}% combined chance)\n` + c.legs.map(legLine).join('\n');
     return [`📢 <b>ZurePicks · daily update</b>\n${h(date)}`, resLines ? `<b>Results so far</b>\n${resLines}` : '', cs.length ? `<b>Slips now</b>\n\n${cs.map(slipBlock).join('\n\n')}` : '<b>Slips now</b>\nNo open slips right now.', `Previews and every result: ${site}/weekly-review.html${foot}`].filter(Boolean).join('\n\n');
   }
   if (mode == 'slips') {
-    const cs = combos(await load(today), t, true).filter((c) => c.legs.length && [2, 3].includes(c.target)); if (!cs.length) return null;
+    const cs = combos(await load(today), t, true).filter((c) => c.legs.length && [2, 3].includes(c.target)); if (!cs.length) return null; rememberSlips(cs, t, dayAt);
     const block = (c) => `<b>${c.target} odds slip · total ${c.od.toFixed(2)}</b> (${c.chance}% combined chance)\n` + c.legs.map((x) => `• ${hm(x.m.d)} ${h(x.m.h)} v ${h(x.m.a)}: ${h(MK[x.k].n[x.i])} @${x.od.toFixed(2)}`).join('\n');
     return `⚽ <b>ZurePicks · today’s slips</b>\n${h(date)}\n\n${cs.map(block).join('\n\n')}\n\nTimes are WAT.\nAll tips and match previews: ${site}/${foot}`;
   }
@@ -63,4 +73,11 @@ export async function build(mode, now, { matchesFor, dataJson, dayAt, site, tz }
 export function potdResult(st, m, { site }) {
   const ok = !!won(m, 'o', { i: st.i });
   return `★ <b>ZurePicks · pick of the day</b>\n\n<b>${h(m.h)} ${m.sc[0]}–${m.sc[1]} ${h(m.a)}</b>\n${h(MK.o.n[st.i])} · ${st.c}% chance · odds ${Number(st.od).toFixed(2)}\n${ok ? '✅ Won' : '❌ Lost'}\n\nEvery pick, win or lose: ${site}/${foot}`;
+}
+
+// Result of one posted slip once every game on it has finished. byId = Map of match id -> finished match.
+export function slipResult(sl, byId, { site }) {
+  const rows = sl.legs.map((x) => { const m = byId.get(x.id), w = !!won(m, x.k, { i: x.i }); return { w, t: `${w ? '✅' : '❌'} ${h(m.h)} ${m.sc[0]}–${m.sc[1]} ${h(m.a)}: ${h(MK[x.k].n[x.i])}` }; });
+  const ok = rows.every((r) => r.w);
+  return `🎯 <b>ZurePicks · ${sl.target} odds slip result</b>\n${ok ? '✅ Won' : '❌ Lost'} · ${rows.filter((r) => r.w).length} of ${rows.length} legs · total ${Number(sl.od).toFixed(2)}\n\n${rows.map((r) => r.t).join('\n')}\n\nEvery result, win or lose: ${site}/weekly-review.html${foot}`;
 }
