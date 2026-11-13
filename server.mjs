@@ -3,14 +3,14 @@ import express from 'express';
 import cors from 'cors';
 import { mapStatus, rank } from './live.mjs';
 import { matchesFor, liveNow, store, dayAt } from './core.mjs';
-import { startScheduler, state, JOBS } from './scheduler.mjs';
+import { startScheduler, restoreState, state, JOBS } from './scheduler.mjs';
 
 const PORT = process.env.PORT || 3000, app = express(); app.use(cors());
 const age = (k) => { const e = store.get(k); return { ageSec: e?.t ? Math.round((Date.now() - e.t) / 1000) : null, error: e?.err || null }; };
 
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', uptimeSec: Math.round(process.uptime()), live: age('live'), finished: age('fin'),
   telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID), jobs: JOBS.map((j) => j.id + ' ' + String(j.h).padStart(2, '0') + ':' + String(j.m).padStart(2, '0')), sentToday: Object.keys(state.sent).filter((k) => k.endsWith(dayAt(Date.now()))), lastRun: state.lastRun },
-  dataRefresh: { configured: !!process.env.GITHUB_TOKEN, last: state.lastDispatch, error: state.dispatchError }, timestamp: new Date() }));
+  memory: { supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY), error: state.persistError || null }, dataRefresh: { configured: !!process.env.GITHUB_TOKEN, last: state.lastDispatch, error: state.dispatchError }, timestamp: new Date() }));
 
 app.get('/api/matches', async (req, res) => {
   const date = /^\d{4}-\d\d-\d\d$/.test(req.query.date || '') ? req.query.date : dayAt(Date.now());
@@ -24,4 +24,4 @@ app.get('/api/live', async (req, res) => {
 
 app.use(['/api/ai-chat'], (req, res) => res.status(410).json({ error: 'Retired. Use the AI Picker on the website.' }));
 app.use((req, res) => res.status(404).json({ error: 'API route not found.' }));
-app.listen(PORT, () => { console.log('ZurePicks live API on port ' + PORT); liveNow(); startScheduler(); });
+app.listen(PORT, () => { console.log('ZurePicks live API on port ' + PORT); liveNow(); restoreState().finally(startScheduler); });

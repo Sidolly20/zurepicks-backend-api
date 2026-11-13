@@ -1,7 +1,8 @@
 // The backend is the clock: it posts to Telegram at fixed times (Africa/Lagos) and pokes GitHub to refresh the site's data.
 // Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for posting; GITHUB_TOKEN (+ GITHUB_REPO) is optional, for the data refresh.
 import { matchesFor, dataJson, dayAt, TZ } from './core.mjs';
-import { build, potdResult, logSlips, postedSlips, slipResult } from './posts.mjs';
+import { build, potdResult, logSlips, postedSlips, slipResult, slipLog } from './posts.mjs';
+import * as db from './persist.mjs';
 import { mirror } from './social.mjs';
 import { settled } from './render.js';
 const T = () => process.env.TELEGRAM_BOT_TOKEN, C = () => process.env.TELEGRAM_CHAT_ID, API = () => process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
@@ -28,7 +29,7 @@ export async function tick(now = new Date(), deps = {}) {
   const out = [];
   for (const j of dueJobs(now)) {
     const key = j.id + clock(now).date; if (busy.has(key)) continue; busy.add(key);
-    try { const text = await builder(j.id, now); state.lastRun[j.id] = { at: new Date().toISOString(), result: text ? 'sent' : 'nothing to post yet' }; if (text) { await send(text); state.sent[key] = new Date().toISOString(); out.push(j.id); state.lastRun['social ' + j.id] = { at: new Date().toISOString(), result: JSON.stringify(await (deps.mirror || mirror)(j.id, text)) }; } }
+    try { const text = await builder(j.id, now); state.lastRun[j.id] = { at: new Date().toISOString(), result: text ? 'sent' : 'nothing to post yet' }; if (text) { await send(text); state.sent[key] = new Date().toISOString(); persistState().catch(() => {}); out.push(j.id); state.lastRun['social ' + j.id] = { at: new Date().toISOString(), result: JSON.stringify(await (deps.mirror || mirror)(j.id, text)) }; } }
     catch (e) { state.lastRun[j.id] = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
     finally { busy.delete(key); }
   }
@@ -49,7 +50,7 @@ export async function checkPotd(now = new Date(), deps = {}) {
       if (!m || !settled(m)) continue;
       if (now.getTime() - Date.parse(m.d) > 8 * 36e5) { state.sent[key] = 'skipped (too old)'; continue; }
       const msg = potdResult(p, m, { site: SITE_URL() }); await send(msg); await (deps.mirror || mirror)('result', msg);
-      state.sent[key] = new Date().toISOString(); state.lastRun.potdresult = { at: new Date().toISOString(), result: 'sent' }; did = true;
+      state.sent[key] = new Date().toISOString(); persistState().catch(() => {}); state.lastRun.potdresult = { at: new Date().toISOString(), result: 'sent' }; did = true;
     } catch (e) { state.lastRun.potdresult = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
     finally { busy.delete(key); }
   }
@@ -69,7 +70,7 @@ export async function checkSlips(now = new Date(), deps = {}) {
       for (const d of new Set(sl.legs.map((x) => x.date))) { cache[d] = cache[d] || ((await getMatches(d)).matches || []); cache[d].forEach((m) => byId.set(m.id, m)); }
       if (sl.legs.some((x) => { const m = byId.get(x.id); return !m || !settled(m); })) continue;
       const msg = slipResult(sl, byId, { site: SITE_URL() }); await send(msg); await (deps.mirror || mirror)('result', msg);
-      state.sent[key] = new Date().toISOString(); state.lastRun.slipresult = { at: new Date().toISOString(), result: 'sent' }; n++;
+      state.sent[key] = new Date().toISOString(); persistState().catch(() => {}); state.lastRun.slipresult = { at: new Date().toISOString(), result: 'sent' }; n++;
     } catch (e) { state.lastRun.slipresult = { at: new Date().toISOString(), result: 'error: ' + e.message }; }
     finally { busy.delete(key); }
   }
@@ -85,4 +86,27 @@ export async function dispatchUpdate(minGapMs = 9 * 60 * 1000, now = Date.now())
   try { const r = await fetch(`${process.env.GITHUB_API_BASE || 'https://api.github.com'}/repos/${repo}/actions/workflows/update.yml/dispatches`, { method: 'POST', headers: { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'zurepicks-api', 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main' }), signal: AbortSignal.timeout(15000) }); state.dispatchError = r.status == 204 ? null : 'GitHub ' + r.status; return r.status == 204; }
   catch (e) { state.dispatchError = e.message; return false; }
 }
-export const startScheduler = () => { const go = () => { tick().catch(() => {}); logSlips(new Date(), { matchesFor, dayAt }).catch(() => {}); checkPotd().catch(() => {}); checkSlips().catch(() => {}); dispatchUpdate().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };
+
+// --- Memory that survives restarts (Supabase table "kv"; see SUPABASE-SETUP.md). Does nothing if Supabase is not configured. ---
+const KEEP_MS = 3 * 864e5; let lastSaved = '';
+export async function restoreState() {
+  if (!db.enabled()) return false;
+  try {
+    const v = await db.load('state'); if (!v) return true;
+    Object.assign(state.sent, v.sent || {}); Object.assign(state.potd, v.potd || {});
+    for (const [k, x] of v.slipLog || []) slipLog.set(k, x);
+    for (const [k, x] of v.postedSlips || []) postedSlips.set(k, x);
+    lastSaved = JSON.stringify(snapshotState()); console.log('Restored state from Supabase'); return true;
+  } catch (e) { console.log('Could not restore state: ' + e.message); return false; }
+}
+function snapshotState() {
+  const cut = Date.now() - KEEP_MS, day = dayAt(cut);
+  return { sent: Object.fromEntries(Object.entries(state.sent).filter(([k]) => !/\d{4}-\d\d-\d\d$/.test(k) || k.slice(-10) >= day)),
+    potd: state.potd, slipLog: [...slipLog].filter(([, x]) => !x.date || x.date >= day), postedSlips: [...postedSlips].filter(([, x]) => typeof x.at != 'number' || x.at > cut) };
+}
+export async function persistState() {
+  if (!db.enabled()) return;
+  try { const snap = snapshotState(), txt = JSON.stringify(snap); if (txt == lastSaved) return; await db.save('state', snap); lastSaved = txt; }
+  catch (e) { state.persistError = e.message; }
+}
+export const startScheduler = () => { const go = () => { tick().catch(() => {}); logSlips(new Date(), { matchesFor, dayAt }).catch(() => {}); checkPotd().catch(() => {}); checkSlips().catch(() => {}); dispatchUpdate().catch(() => {}); persistState().catch(() => {}); }; setInterval(go, 60000); setTimeout(go, 15000); };
